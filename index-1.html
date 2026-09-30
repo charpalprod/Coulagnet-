@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Le Coulagnet à Marvejols</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌊</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;600&family=Instrument+Serif&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#E7EAE6; --ink:#1E282C; --muted:#5E6B6F; --line:#C9CFCB;
+  --water:#2E6A88; --water-soft:rgba(46,106,136,.18); --low:#A9782A; --high:#8A3B2E;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#151C1F;--ink:#E4E8E6;--muted:#93A0A3;--line:#2C373B;
+        --water:#6FB2D2;--water-soft:rgba(111,178,210,.2);--low:#D9A650;--high:#E0806D}
+}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Instrument Sans",system-ui,-apple-system,sans-serif}
+main{max-width:34rem;margin:0 auto;padding:2rem 1.25rem 3rem}
+h1{font:400 clamp(2.3rem,10vw,3.2rem)/1 "Instrument Serif",Georgia,serif;margin:0 0 .3rem}
+.where{color:var(--muted);margin:0 0 2rem}
+.now{display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap}
+.num{font:400 clamp(4.5rem,24vw,7rem)/.9 "Instrument Serif",Georgia,serif;letter-spacing:-.02em}
+.unit{font-size:1.3rem;color:var(--muted)}
+.trend{font-size:1.1rem;font-weight:600}
+.verdict{font-size:1.15rem;margin:.8rem 0 .2rem}
+.verdict.low{color:var(--low)} .verdict.high{color:var(--high)}
+.meta{color:var(--muted);font-size:.9rem;margin:0}
+.chart{margin:2rem 0 .5rem}
+.chart svg{display:block;width:100%;height:auto}
+.axis{font-size:11px;fill:var(--muted)}
+.facts{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin:1.5rem 0;padding:1rem 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.facts b{display:block;font:400 1.8rem/1.1 "Instrument Serif",Georgia,serif}
+.facts span{color:var(--muted);font-size:.85rem}
+.links a{display:block;padding:.9rem 0;color:var(--ink);text-decoration:none;border-bottom:1px solid var(--line)}
+.links a:hover,.links a:focus-visible{color:var(--water)}
+a:focus-visible,button:focus-visible{outline:3px solid var(--water);outline-offset:3px}
+button{font:inherit;color:var(--water);background:none;border:1px solid var(--water);border-radius:999px;padding:.45rem 1rem;margin-top:1rem;cursor:pointer}
+.error{color:var(--high)}
+.src{color:var(--muted);font-size:.8rem;margin-top:2rem}
+</style>
+</head>
+<body>
+<main>
+  <h1>Le Coulagnet</h1>
+  <p class="where">Station de Marvejols, Lozère</p>
+
+  <div class="now">
+    <span class="num" id="q">…</span><span class="unit" id="qunit">m³/s</span>
+    <span class="trend" id="trend"></span>
+  </div>
+  <p class="verdict" id="verdict">Chargement des mesures…</p>
+  <p class="meta" id="when"></p>
+
+  <div class="chart" id="chart" aria-label="Débit des 7 derniers jours"></div>
+
+  <div class="facts">
+    <div><b id="h">…</b><span>Hauteur d'eau</span></div>
+    <div><b id="range">…</b><span>Mini et maxi sur 7 jours</span></div>
+  </div>
+
+  <button id="refresh" type="button">Actualiser</button>
+
+  <nav class="links">
+    <a href="https://www.hydro.eaufrance.fr/sitehydro/O7085010/fiche" target="_blank" rel="noopener">Fiche complète sur l'HydroPortail</a>
+    <a href="https://www.vigicrues.gouv.fr/" target="_blank" rel="noopener">Vigilance crues (Vigicrues)</a>
+    <a href="https://laviedelariviere.valleedulot.com/station/O7085010/" target="_blank" rel="noopener">La vie de la rivière, vallée du Lot</a>
+  </nav>
+
+  <p class="src">Données temps réel Hub'Eau (Eaufrance), station O7085010, non validées. Moyenne annuelle de référence : environ 0,89 m³/s. Mise à jour automatique toutes les 15 minutes.</p>
+</main>
+
+<script>
+const SITE = "O7085010";
+const MODULE_LS = 886; // débit moyen interannuel, en l/s
+const API = "https://hubeau.eaufrance.fr/api/v2/hydrometrie/";
+const $ = id => document.getElementById(id);
+const fmt = (v, d) => v.toLocaleString("fr-FR", {minimumFractionDigits:d, maximumFractionDigits:d});
+const log = [];
+let dailyMode = false;
+
+function flowText(ls){
+  if (ls < 1000) return {n: fmt(ls, 0), u: "l/s"};
+  return {n: fmt(ls/1000, ls < 10000 ? 2 : 1), u: "m³/s"};
+}
+
+async function getJSON(url){
+  try{
+    const r = await fetch(url);
+    if (!r.ok && r.status !== 206){ log.push(r.status + " sur " + url.split("?")[0].split("/").pop()); return null; }
+    return await r.json();
+  }catch(e){ log.push("réseau : " + e.message); return null; }
+}
+
+// Codes des stations rattachées au site (trouvés dans le référentiel)
+let codes = null;
+async function stationCodes(){
+  if (codes) return codes;
+  const j = await getJSON(API + "referentiel/stations?code_site=" + SITE + "&size=20&fields=code_station,en_service");
+  codes = [SITE];
+  if (j && j.data) j.data.forEach(s => codes.push(s.code_station));
+  return codes;
+}
+
+const toPts = (arr, dk, vk) => (arr||[])
+  .filter(o => o[vk] != null)
+  .map(o => ({t:new Date(o[dk]).getTime(), v:+o[vk]}))
+  .sort((a,b)=>a.t-b.t);
+
+// Temps réel (5 à 60 min), 7 derniers jours
+async function fetchSeries(grandeur){
+  const cutoff = Date.now() - 7*864e5;
+  for (const code of await stationCodes()){
+    const j = await getJSON(API + "observations_tr?code_entite=" + code + "&grandeur_hydro=" + grandeur + "&size=3000&fields=date_obs,resultat_obs");
+    const pts = toPts(j && j.data, "date_obs", "resultat_obs").filter(p => p.t >= cutoff);
+    if (pts.length) return pts;
+  }
+  return [];
+}
+
+// Secours : débits moyens journaliers sur 30 jours
+async function fetchDaily(){
+  const since = new Date(Date.now() - 30*864e5).toISOString().slice(0,10);
+  const j = await getJSON(API + "obs_elab?code_entite=" + SITE + "&grandeur_hydro_elab=QmnJ&date_debut_obs_elab=" + since + "&size=100&fields=date_obs_elab,resultat_obs_elab");
+  return toPts(j && j.data, "date_obs_elab", "resultat_obs_elab");
+}
+
+function verdict(ls){
+  const r = ls / MODULE_LS;
+  if (r < 0.1)  return ["Très basses eaux : moins d'un dixième du débit moyen.", "low"];
+  if (r < 0.5)  return ["Basses eaux : " + Math.round(1/r) + " fois moins que le débit moyen.", "low"];
+  if (r < 1.5)  return ["Débit proche de la moyenne annuelle.", ""];
+  if (r < 5)    return ["Eaux hautes : " + fmt(r,1) + " fois le débit moyen.", "high"];
+  return ["Très hautes eaux : " + Math.round(r) + " fois le débit moyen. Consultez Vigicrues.", "high"];
+}
+
+function drawChart(pts){
+  const W=340, H=170, L=4, R=4, T=10, B=22;
+  const t0=pts[0].t, t1=pts[pts.length-1].t;
+  const vmax=Math.max(...pts.map(p=>p.v))*1.1 || 1;
+  const x=t=>L+(t-t0)/(t1-t0||1)*(W-L-R);
+  const y=v=>T+(1-v/vmax)*(H-T-B);
+  const line=pts.map((p,i)=>(i?"L":"M")+x(p.t).toFixed(1)+" "+y(p.v).toFixed(1)).join(" ");
+  const area=line+` L${x(t1).toFixed(1)} ${H-B} L${x(t0).toFixed(1)} ${H-B} Z`;
+  let ticks="";
+  const d=new Date(t0); d.setHours(0,0,0,0); d.setDate(d.getDate()+1);
+  const step = (t1-t0) > 10*864e5 ? 7 : 1;
+  for(;d.getTime()<t1;d.setDate(d.getDate()+step)){
+    const xx=x(d.getTime()).toFixed(1);
+    ticks+=`<line x1="${xx}" x2="${xx}" y1="${T}" y2="${H-B}" stroke="var(--line)" stroke-width=".6"/>`+
+           `<text class="axis" x="${xx}" y="${H-6}" text-anchor="middle">${step>1 ? d.toLocaleDateString("fr-FR",{day:"numeric",month:"short"}).replace(".","") : d.toLocaleDateString("fr-FR",{weekday:"short"}).replace(".","")}</text>`;
+  }
+  let mod="";
+  if (MODULE_LS < vmax){
+    const ym=y(MODULE_LS).toFixed(1);
+    mod=`<line x1="${L}" x2="${W-R}" y1="${ym}" y2="${ym}" stroke="var(--muted)" stroke-dasharray="3 3" stroke-width=".8"/>`+
+        `<text class="axis" x="${W-R}" y="${ym-4}" text-anchor="end">moyenne annuelle</text>`;
+  }
+  const last=pts[pts.length-1];
+  $("chart").innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Débit sur 7 jours">
+    ${ticks}${mod}
+    <path d="${area}" fill="var(--water-soft)"/>
+    <path d="${line}" fill="none" stroke="var(--water)" stroke-width="2" stroke-linejoin="round"/>
+    <circle cx="${x(last.t)}" cy="${y(last.v)}" r="4" fill="var(--water)"/>
+  </svg>`;
+}
+
+async function load(){
+  $("refresh").disabled = true;
+  log.length = 0;
+  let [q, h] = await Promise.all([fetchSeries("Q"), fetchSeries("H")]);
+  dailyMode = false;
+  if (!q.length){ q = await fetchDaily(); dailyMode = q.length > 0; }
+  $("refresh").disabled = false;
+
+  if (!q.length){
+    $("q").textContent="—"; $("qunit").textContent=""; $("trend").textContent="";
+    $("verdict").textContent="Aucune mesure reçue" + (log.length ? " (" + log.slice(0,3).join(" ; ") + ")" : " : Hub'Eau n'a renvoyé aucune donnée pour cette station") + ". Réessayez plus tard ou ouvrez l'HydroPortail ci-dessous.";
+    $("verdict").className="verdict error";
+    return;
+  }
+
+  const last=q[q.length-1];
+  const f=flowText(last.v);
+  $("q").textContent=f.n; $("qunit").textContent=f.u;
+
+  // Tendance : comparaison avec la mesure d'il y a environ 3 heures
+  const ref=q.filter(p=>p.t<=last.t-(dailyMode?864e5:3*36e5)).pop();
+  if (ref){
+    const diff=(last.v-ref.v)/(ref.v||1);
+    $("trend").textContent = diff>0.05 ? "↗ en hausse" : diff<-0.05 ? "↘ en baisse" : "→ stable";
+    $("trend").style.color = diff>0.05 ? "var(--high)" : diff<-0.05 ? "var(--low)" : "var(--muted)";
+  }
+
+  const [txt, cls]=verdict(last.v);
+  $("verdict").textContent=txt; $("verdict").className="verdict "+cls;
+  $("when").textContent = dailyMode
+    ? "Débit moyen du "+new Date(last.t).toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long"})+" (mesures en direct indisponibles)"
+    : "Mesure du "+new Date(last.t).toLocaleString("fr-FR",{weekday:"long",day:"numeric",month:"long",hour:"2-digit",minute:"2-digit"});
+  document.querySelector(".facts span+span, #range+span").textContent = dailyMode ? "Mini et maxi sur 30 jours" : "Mini et maxi sur 7 jours";
+
+  const vs=q.map(p=>p.v), mn=flowText(Math.min(...vs)), mx=flowText(Math.max(...vs));
+  $("range").textContent=`${mn.n} ${mn.u} – ${mx.n} ${mx.u}`;
+
+  if (h.length){
+    const hv=h[h.length-1].v; // en millimètres
+    $("h").textContent = fmt(hv/10,0)+" cm";
+  } else $("h").textContent="—";
+
+  if (q.length>1) drawChart(q);
+}
+
+$("refresh").addEventListener("click", load);
+document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) load(); });
+setInterval(load, 15*60*1000);
+load();
+</script>
+</body>
+</html>
